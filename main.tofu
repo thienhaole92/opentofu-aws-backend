@@ -14,21 +14,21 @@ provider "aws" {
     tags = merge({
       Project     = var.project
       Environment = var.group
-      Terraform   = "true"
-      ManagedBy   = "terraform"
+      OpenTofu    = "true"
+      ManagedBy   = "tofu"
     }, var.tags)
   }
 }
 
 locals {
-  bucket_name = "${var.project}-${var.group}-terraform-backend"
-  table_name  = "${var.project}-${var.group}-terraform-state-locks"
+  bucket_name = "${var.project}-${var.group}-tofu-backend"
+  table_name  = "${var.project}-${var.group}-tofu-state-locks"
 
   common_tags = {
     Project     = var.project
     Environment = var.group
-    Terraform   = "true"
-    ManagedBy   = "terraform"
+    OpenTofu    = "true"
+    ManagedBy   = "tofu"
   }
 }
 
@@ -36,7 +36,7 @@ resource "aws_s3_bucket" "tfstate" {
   bucket = local.bucket_name
 
   tags = merge(local.common_tags, {
-    Name = "terraform-backend"
+    Name = "tofu-backend"
   })
 }
 
@@ -157,6 +157,6 @@ resource "aws_dynamodb_table" "locks" {
   }
 
   tags = merge(local.common_tags, {
-    Name = "terraform-state-locks"
+    Name = "tofu-state-locks"
   })
 }
