@@ -172,7 +172,7 @@ The configuration is optimized for cost efficiency:
 
 ### Common Issues
 
-1. **Access Denied Errors**: Ensure IAM permissions include s3:_, dynamodb:_, and kms:\* actions
+1. **Access Denied Errors**: Ensure IAM permissions include s3:_, dynamodb:_
 2. **Bucket Already Exists**: Use a unique project name
 
 ### Debugging
