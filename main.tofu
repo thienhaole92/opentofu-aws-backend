@@ -1,8 +1,10 @@
 terraform {
+  required_version = ">= 1.10"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "6.13.0"
+      version = "~> 6.13"
     }
   }
 }
@@ -14,30 +16,32 @@ provider "aws" {
     tags = merge({
       Project     = var.project
       Environment = var.group
-      OpenTofu    = "true"
-      ManagedBy   = "tofu"
+      ManagedBy   = "OpenTofu"
+      CreatedAt   = timestamp()
     }, var.tags)
   }
 }
 
 locals {
-  bucket_name = "${var.project}-${var.group}-tofu-backend"
-  table_name  = "${var.project}-${var.group}-tofu-state-locks"
-
-  common_tags = {
-    Project     = var.project
-    Environment = var.group
-    OpenTofu    = "true"
-    ManagedBy   = "tofu"
-  }
+  name_prefix = "${var.project}-${var.group}"
+  bucket_name = "${local.name_prefix}-tfstate-${var.region}"
 }
+
+# -----------------------------------------------------------------------------
+# S3 BUCKET FOR TERRAFORM STATE
+# -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "tfstate" {
   bucket = local.bucket_name
 
-  tags = merge(local.common_tags, {
-    Name = "tofu-backend"
-  })
+  # Prevent accidental deletion
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = {
+    Purpose = "OpenTofu state storage"
+  }
 }
 
 # Enable versioning (important for recovering old states)
@@ -55,7 +59,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = var.enable_kms_key ? "aws:kms" : "AES256"
+      kms_master_key_id = var.enable_kms_key ? aws_kms_key.secrets[0].arn : null
     }
   }
 }
@@ -70,76 +75,60 @@ resource "aws_s3_bucket_public_access_block" "tfstate" {
   restrict_public_buckets = true
 }
 
-# Enable bucket lifecycle configuration to manage old versions
-resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
-  bucket     = aws_s3_bucket.tfstate.id
-  depends_on = [aws_s3_bucket_versioning.tfstate]
+# This policy enforces encryption in transit (HTTPS).
+resource "aws_s3_bucket_policy" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+  policy = data.aws_iam_policy_document.tfstate.json
+}
 
-  dynamic "rule" {
-    for_each = var.enable_lifecycle_policies ? [1] : []
-
-    content {
-      id     = "state-version-lifecycle"
-      status = "Enabled"
-
-      # Filter block applies to all objects in bucket
-      filter {}
-
-      noncurrent_version_transition {
-        noncurrent_days = var.transition_ia_days
-        storage_class   = "STANDARD_IA"
-      }
-
-      noncurrent_version_transition {
-        noncurrent_days = var.transition_glacier_days
-        storage_class   = "GLACIER"
-      }
-
-      noncurrent_version_expiration {
-        noncurrent_days = var.expiration_days
-      }
+data "aws_iam_policy_document" "tfstate" {
+  statement {
+    sid    = "EnforceTLSTrafficOnly"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.tfstate.arn,
+      "${aws_s3_bucket.tfstate.arn}/*",
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
     }
   }
 }
 
-# Add bucket policy to enforce encryption and secure access
-resource "aws_s3_bucket_policy" "tfstate" {
+# Enable bucket lifecycle configuration to manage old versions
+resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
+  count  = var.enable_lifecycle_policy ? 1 : 0
   bucket = aws_s3_bucket.tfstate.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.tfstate.arn}/*"
-        Condition = {
-          StringNotEquals = {
-            "s3:x-amz-server-side-encryption" = "AES256"
-          }
-        }
-      },
-      {
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.tfstate.arn}/*"
-        Condition = {
-          Null = {
-            "s3:x-amz-server-side-encryption" = true
-          }
-        }
-      }
-    ]
-  })
+  rule {
+    id     = "state-lifecycle"
+    status = "Enabled"
+
+    filter {} # Apply to all objects
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.noncurrent_version_expiration_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
-# ----------------------------
-# DynamoDB Table for State Locking
-# ----------------------------
+# -----------------------------------------------------------------------------
+# DYNAMODB TABLE FOR STATE LOCKING
+# -----------------------------------------------------------------------------
+
 resource "aws_dynamodb_table" "locks" {
-  name         = local.table_name
+  name         = "${local.name_prefix}-state-locks"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "LockID"
 
@@ -148,15 +137,48 @@ resource "aws_dynamodb_table" "locks" {
     type = "S"
   }
 
+  # TTL automatically cleans up stale locks.
+  ttl {
+    attribute_name = "Expires"
+    enabled        = true
+  }
+
   server_side_encryption {
-    enabled = true
+    enabled     = true
+    kms_key_arn = var.enable_kms_key ? aws_kms_key.secrets[0].arn : null
   }
 
   point_in_time_recovery {
-    enabled = true
+    enabled = var.enable_dynamodb_pitr
   }
 
-  tags = merge(local.common_tags, {
-    Name = "tofu-state-locks"
-  })
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = {
+    Purpose = "OpenTofu state locking"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# KMS KEY FOR SECRETS ENCRYPTION
+# -----------------------------------------------------------------------------
+
+resource "aws_kms_key" "secrets" {
+  count                   = var.enable_kms_key ? 1 : 0
+  description             = "KMS key for encrypting OpenTofu state and credentials in ${var.group}"
+  deletion_window_in_days = var.kms_deletion_window
+  enable_key_rotation     = true
+
+  tags = {
+    Name    = "${local.name_prefix}-secrets"
+    Purpose = "OpenTofu state encryption"
+  }
+}
+
+resource "aws_kms_alias" "secrets_alias" {
+  count         = var.enable_kms_key ? 1 : 0
+  name          = "alias/${local.name_prefix}-secrets"
+  target_key_id = aws_kms_key.secrets[0].key_id
 }

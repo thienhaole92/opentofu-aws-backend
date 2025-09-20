@@ -1,16 +1,18 @@
 # OpenTofu AWS Backend Module
 
-A secure OpenTofu module for provisioning an S3 bucket and DynamoDB table to serve as a remote backend for OpenTofu state management. This module follows AWS best practices for security, cost optimization, and reliability while providing robust state locking and versioning capabilities.
+A secure OpenTofu module for provisioning an S3 bucket and DynamoDB table to serve as a remote backend for OpenTofu state management. This module follows AWS best practices for security, cost optimization, and reliability, providing robust state locking, versioning, and encryption capabilities.
 
 ## 🚀 Features
 
-- **Secure State Storage**: S3 bucket with versioning and server-side encryption (SSE-S3) enabled
+- **Secure State Storage**: S3 bucket with versioning and server-side encryption (KMS or AES256) enabled
 - **State Locking**: DynamoDB table for state locking to prevent conflicts
-- **Security Hardened**: Block public access and enforce encryption at rest
-- **Cost Optimized**: Lifecycle rules to automatically manage storage costs
-- **Compliance Ready**: Explicit encryption enforcement for regulatory requirements
-- **Flexible Configuration**: Support for multiple environments and projects
-- **Audit Ready**: Comprehensive versioning and access logging capabilities
+- **Flexible Encryption**: Optional KMS key for enhanced encryption, with AES256 as the fallback
+- **Security Hardened**: Blocks public access, enforces encryption at rest, and requires HTTPS
+- **Cost Optimized**: Lifecycle rules to manage storage costs automatically
+- **Compliance Ready**: Enforces encryption and tagging for regulatory requirements
+- **Flexible Configuration**: Supports multiple environments, projects, and custom tags
+- **Audit Ready**: Comprehensive versioning, access logging, and resource tagging
+- **Prevent Accidental Deletion**: Lifecycle rules prevent accidental deletion of critical resources
 
 ## 🏗 Architecture
 
@@ -19,44 +21,48 @@ graph TD
     A[OpenTofu Operations] --> B[S3 Bucket<br/>State Storage]
     A --> C[DynamoDB Table<br/>State Locking]
     B --> D[Versioning Enabled]
-    B --> E[Server-Side Encryption]
+    B --> E[KMS or AES256 Encryption]
     B --> F[Lifecycle Policies]
     C --> G[Point-in-Time Recovery]
-    C --> H[On-Demand Capacity]
+    C --> H[KMS or SSE Encryption]
+    C --> I[On-Demand Capacity]
+    J[KMS Key<br/>Optional Encryption] --> B
+    J --> C
 
     style A fill:#e1f5fe
     style B fill:#f3e5f5
     style C fill:#e8f5e9
+    style J fill:#fff3e0
 ```
 
 ## 🔍 Deep Dive: Security & Cost Optimization
 
-### 1. Lifecycle Configuration: Smart Cost Management
+### 1. Lifecycle Configuration: Automated Cost Savings
 
-The lifecycle configuration automatically manages previous versions of state files to optimize storage costs:
+The lifecycle configuration automates housekeeping tasks to optimize storage costs and maintain a clean bucket:
 
-| Action                        | Trigger       | Result                                                   |
-| ----------------------------- | ------------- | -------------------------------------------------------- |
-| **Transition to STANDARD_IA** | After 30 days | Reduces storage costs for infrequently accessed versions |
-| **Transition to GLACIER**     | After 60 days | Archives versions to lowest cost storage tier            |
-| **Permanent Deletion**        | After 90 days | Cleans up old versions to minimize storage usage         |
+- **Permanent Deletion of Old Versions**: Non-current versions of the state file are deleted after a configurable period (default: 90 days), preventing indefinite storage costs.
+- **Cleanup of Failed Uploads**: Incomplete multipart uploads are aborted after 7 days, avoiding hidden costs from orphaned data.
+- **Expired Object Delete Markers**: Automatically removes expired delete markers to keep the bucket tidy.
 
-**Important**: This only affects previous versions, not the current state file, which remains immediately accessible in the STANDARD storage class.
+**Important**: These rules only affect non-current versions, incomplete uploads, and delete markers, ensuring the current state file remains accessible.
 
-### 2. Bucket Policy: Mandatory Security Enforcement
+### 2. Encryption: Flexible and Secure
 
-The bucket policy creates an explicit security guardrail using a `"Deny"` effect with two critical statements:
+- **KMS Encryption (Optional)**: When enabled, a dedicated KMS key encrypts both the S3 bucket and DynamoDB table, providing enhanced security and key rotation.
+- **AES256 as Default**: If KMS is disabled, the S3 bucket uses AES256 server-side encryption, ensuring compliance with minimal overhead.
 
-1. **Deny unencrypted uploads**: Blocks any `s3:PutObject` request that doesn't explicitly specify AES256 encryption
-2. **Deny unencrypted uploads (alternative method)**: Blocks uploads that omit the encryption header entirely
+### 3. Bucket Policy: Enforcing Secure Connections
 
-This policy ensures that **every single object** written to the bucket must be encrypted at rest, closing security loopholes that could allow misconfigured tools or malicious actors to bypass encryption requirements.
+The bucket policy enforces secure data transit with two critical statements:
+
+- **Enforce HTTPS**: Denies all S3 actions (`s3:*`) for non-HTTPS requests, ensuring secure connections.
 
 ## 📋 Prerequisites
 
-- OpenTofu >= v1.10.5
-- AWS Provider >= 6.13.0
-- AWS IAM permissions to create S3 buckets and DynamoDB tables
+- OpenTofu >= v1.10.0
+- AWS Provider >= 6.13
+- AWS IAM permissions to create S3 buckets, DynamoDB tables, and KMS keys (if enabled)
 - Appropriate AWS credentials configured
 
 ## 🛠 Installation
@@ -65,7 +71,7 @@ Add the module to your OpenTofu configuration:
 
 ```hcl
 module "opentofu_backend" {
-  source = "git::https://github.com/thienhaole92/opentofu-aws-backend.git?ref=v1.0.1"
+  source = "git::https://github.com/thienhaole92/opentofu-aws-backend.git?ref=v1.0.2"
 
   project = "multi-account-project"
   group   = "prod" # or "nonprod" for development/staging
@@ -74,7 +80,7 @@ module "opentofu_backend" {
 
 ## ⚙️ Configuration
 
-### 1. Default Values (Current Behavior)
+### 1. Default Values with KMS Encryption
 
 ```hcl
 module "opentofu_backend" {
@@ -85,22 +91,22 @@ module "opentofu_backend" {
 }
 ```
 
-### 2. Custom Retention for Production
+### 2. Custom Retention with KMS for Production
 
 ```hcl
 module "opentofu_backend" {
   source = "./opentofu-backend"
 
-  project                 = "myproject"
-  region                  = "ap-southeast-1"
-  group                   = "prod"
-  transition_ia_days      = 60
-  transition_glacier_days = 120
-  expiration_days         = 365
+  project                            = "myproject"
+  region                             = "ap-southeast-1"
+  group                              = "prod"
+  noncurrent_version_expiration_days = 180
+  enable_kms_key                     = true
+  kms_deletion_window                = 15
 }
 ```
 
-### 3. Disable Lifecycle Policies
+### 3. Disable KMS (Use AES256) and Lifecycle Policies
 
 ```hcl
 module "opentofu_backend" {
@@ -109,7 +115,22 @@ module "opentofu_backend" {
   project                   = "myproject"
   region                    = "ap-southeast-1"
   group                     = "dev"
-  enable_lifecycle_policies = false
+  enable_lifecycle_policy   = false
+  enable_kms_key            = false
+}
+```
+
+### 4. Disable Point-in-Time Recovery and KMS
+
+```hcl
+module "opentofu_backend" {
+  source = "./opentofu-backend"
+
+  project              = "myproject"
+  region               = "ap-southeast-1"
+  group                = "dev"
+  enable_dynamodb_pitr = false
+  enable_kms_key       = false
 }
 ```
 
@@ -120,7 +141,7 @@ After deployment, integrate the backend with your OpenTofu configuration:
 ```hcl
 terraform {
   backend "s3" {
-    bucket         = module.terraform_opentofu_backendbackend.s3_bucket_name
+    bucket         = module.opentofu_backend.s3_bucket_name
     key            = "terraform/prod/opentofu.tfstate"
     region         = module.opentofu_backend.region
     dynamodb_table = module.opentofu_backend.dynamodb_table_name
@@ -131,49 +152,53 @@ terraform {
 
 ## 📊 Inputs
 
-| Name                        | Type        | Description                                                   | Default            | Required |
-| :-------------------------- | :---------- | :------------------------------------------------------------ | :----------------- | :------- |
-| `project`                   | string      | Project name used for resource naming and tagging             | `"myproject"`      | yes      |
-| `group`                     | string      | Environment group: 'nonprod' (dev/uat) or 'prod' (production) | `"nonprod"`        | yes      |
-| `region`                    | string      | AWS region where resources will be deployed                   | `"ap-southeast-1"` | no       |
-| `tags`                      | map(string) | Additional tags to apply to all resources                     | `{}`               | no       |
-| `transition_ia_days`        | number      | Days before moving non-current versions to STANDARD_IA        | `30`               | no       |
-| `transition_glacier_days`   | number      | Days before moving non-current versions to GLACIER            | `60`               | no       |
-| `expiration_days`           | number      | Days before expiring non-current versions                     | `90`               | no       |
-| `enable_lifecycle_policies` | bool        | Whether to enable S3 bucket lifecycle policies                | `true`             | no       |
+| Name                                 | Type        | Description                                                              | Default            | Required |
+| :----------------------------------- | :---------- | :----------------------------------------------------------------------- | :----------------- | :------- |
+| `project`                            | string      | Project name (3-32 characters, lowercase letters, numbers, hyphens)      | n/a                | yes      |
+| `group`                              | string      | Environment group: 'nonprod' or 'prod'                                   | n/a                | yes      |
+| `region`                             | string      | AWS region (e.g., 'us-east-1')                                           | `"ap-southeast-1"` | no       |
+| `tags`                               | map(string) | Additional tags (keys: 1-128 chars, letters/numbers/hyphens/underscores) | `{}`               | no       |
+| `noncurrent_version_expiration_days` | number      | Days to retain non-current versions (30-365)                             | `90`               | no       |
+| `enable_lifecycle_policy`            | bool        | Enable S3 bucket lifecycle policies                                      | `true`             | no       |
+| `enable_dynamodb_pitr`               | bool        | Enable Point-in-Time Recovery for DynamoDB                               | `true`             | no       |
+| `enable_kms_key`                     | bool        | Enable KMS key for S3 and DynamoDB encryption                            | `true`             | no       |
+| `kms_deletion_window`                | number      | Days before deleted KMS key is permanently removed (7-30)                | `30`               | no       |
 
 ## 📤 Outputs
 
-| Name                  | Description                                         |
-| :-------------------- | :-------------------------------------------------- |
-| `s3_bucket_name`      | Name of the S3 bucket for OpenTofu state            |
-| `s3_bucket_arn`       | ARN of the S3 bucket for OpenTofu state             |
-| `dynamodb_table_name` | Name of the DynamoDB table for state locking        |
-| `dynamodb_table_arn`  | ARN of the DynamoDB table for state locking         |
-| `backend_config`      | Ready-to-use OpenTofu backend configuration snippet |
+| Name                  | Description                                    |
+| :-------------------- | :--------------------------------------------- |
+| `s3_bucket_name`      | Name of the S3 bucket for OpenTofu state       |
+| `s3_bucket_arn`       | ARN of the S3 bucket for OpenTofu state        |
+| `dynamodb_table_name` | Name of the DynamoDB table for state locking   |
+| `dynamodb_table_arn`  | ARN of the DynamoDB table for state locking    |
+| `kms_key_arn`         | ARN of the KMS key (null if KMS is disabled)   |
+| `kms_key_alias`       | Alias of the KMS key (null if KMS is disabled) |
 
 ## 🔒 Security Considerations
 
-- All public access is blocked by default
-- Encryption at rest is mandatory and enforced through bucket policies
-- All resources are tagged for cost allocation and management
-- DynamoDB table has point-in-time recovery enabled for backup protection
-- IAM policies should follow the principle of least privilege
+- **Public Access Blocked**: All public access to the S3 bucket is blocked by default.
+- **Encryption at Rest**: Mandatory encryption (KMS or AES256 for S3, KMS or SSE for DynamoDB) enforced via bucket policies.
+- **Resource Protection**: Lifecycle rules prevent accidental deletion of S3 bucket and DynamoDB table.
+- **Tagging**: All resources are tagged for cost allocation, including `Project`, `Environment`, `ManagedBy`, and `CreatedAt`.
+- **DynamoDB PITR**: Enabled by default for backup protection (configurable).
 
 ## 💰 Cost Estimation
 
 The configuration is optimized for cost efficiency:
 
-- **DynamoDB**: Uses pay-per-request pricing (no provisioned capacity needed)
-- **S3 Storage**: Lifecycle rules automatically transition data to cheaper storage classes
-- **Cleanup**: Old state versions are automatically cleaned up after configurable retention periods
+- **DynamoDB**: Uses pay-per-request pricing, avoiding provisioned capacity costs.
+- **S3 Storage**: Lifecycle rules clean up old versions and incomplete uploads to minimize storage costs.
+- **KMS**: Optional KMS key usage allows cost savings with AES256 as the default encryption method.
+- **Tagging**: Comprehensive tagging supports cost allocation and tracking.
 
 ## 🔍 Troubleshooting
 
 ### Common Issues
 
-1. **Access Denied Errors**: Ensure IAM permissions include s3:_, dynamodb:_
-2. **Bucket Already Exists**: Use a unique project name
+1. **Access Denied Errors**: Ensure IAM permissions include `s3:*`, `dynamodb:*`, and `kms:*` (if KMS is enabled).
+2. **Bucket Already Exists**: Use a unique `project` name and verify region-specific naming.
+3. **KMS Errors**: If KMS is enabled, ensure the IAM role has permissions to use the KMS key.
 
 ### Debugging
 

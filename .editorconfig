@@ -1,15 +1,20 @@
 root = true
 
+# These settings apply to all files unless overridden below.
 [*]
 charset = utf-8
 end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
+max_line_length = 120
 
-[*.tf]
+# Terraform and OpenTofu Configuration Files
+[*.{tf,tfvars}]
 indent_style = space
 indent_size = 2
+max_line_length = 120
 
+# OpenTofu Configuration Files
 [*.tofu]
 indent_style = space
 indent_size = 2
