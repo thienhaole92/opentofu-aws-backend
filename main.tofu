@@ -17,7 +17,6 @@ provider "aws" {
       Project     = var.project
       Environment = var.group
       ManagedBy   = "OpenTofu"
-      CreatedAt   = timestamp()
     }, var.tags)
   }
 }
