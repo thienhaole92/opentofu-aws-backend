@@ -71,7 +71,7 @@ Add the module to your OpenTofu configuration:
 
 ```hcl
 module "opentofu_backend" {
-  source = "git::https://github.com/thienhaole92/opentofu-aws-backend.git?ref=v1.0.2"
+  source = "git::https://github.com/thienhaole92/opentofu-aws-backend.git?ref=v1.0.3"
 
   project = "multi-account-project"
   group   = "prod" # or "nonprod" for development/staging
